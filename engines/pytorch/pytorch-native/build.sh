@@ -39,12 +39,17 @@ if [[ ! -d "libtorch" ]]; then
             git submodule sync
             git submodule update --init --recursive --jobs 8
 
+            # --- CUDA 12.8 toolkit (set BEFORE patch detection so nvcc picks up the right version) ---
+            export CUDA_HOME=/usr/local/cuda-12.8
+            export PATH=${CUDA_HOME}/bin:${PATH}
+            export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
             # --- PATCHES ---
             # The cudnn_frontend submodule bundled with PyTorch v2.7.1 uses the
             # 4-arg cudaGraphNodeGetDependentNodes (with nullptr edge-data arg).
             # CUDA 12.8 declares the 3-arg version — so we strip the nullptr for 12.8.
             # CUDA 13.x removed cuFFT enums and also needs the 4-arg call (already present).
-            CUDA_MAJOR=$("${CUDA_HOME:-/usr/local/cuda}"/bin/nvcc --version | grep -oP 'release \K[0-9]+')
+            CUDA_MAJOR=$("${CUDA_HOME}"/bin/nvcc --version | grep -oP 'release \K[0-9]+')
 
             # PATCH A: For CUDA < 13 — remove the extra nullptr arg so the call
             # matches the 3-arg signature in cuda_runtime_api.h
@@ -85,15 +90,7 @@ else:
                     aten/src/ATen/native/cuda/CuFFTUtils.h
             fi
 
-            # --- CUDA 12.8 toolkit ---
-            # We use CUDA 12.8 (the latest version officially supported by PyTorch 2.7.x)
-            # even though the NGC container ships CUDA 13.1. CUDA 13.1 bundles CCCL 3.x
-            # which removed cub::TransformInputIterator and other APIs that PyTorch 2.7.x
-            # depends on. The host driver (13.x) is backwards compatible with 12.8-built
-            # binaries at runtime.
-            export CUDA_HOME=/usr/local/cuda-12.8
-            export PATH=${CUDA_HOME}/bin:${PATH}
-            export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+            # CUDA_HOME, PATH, LD_LIBRARY_PATH already set above before patch detection
 
             CUB_DIR=${CUDA_HOME}/targets/sbsa-linux/include
 
