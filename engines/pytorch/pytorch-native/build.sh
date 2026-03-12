@@ -97,7 +97,7 @@ else:
             ls "${CUB_DIR}/cub/cub.cuh" \
                 && echo "✅ CUB found at ${CUB_DIR}" \
                 || { echo "❌ CUB not found at ${CUB_DIR} — check CUDA 12.8 installation"; exit 1; }
-            export TORCH_CUDA_ARCH_LIST="9.0;12.0"
+            export TORCH_CUDA_ARCH_LIST="9.0;12.0+PTX"
             export MAX_JOBS=$NUM_PROC
             export USE_CUDA=1
             export USE_CUDNN=1

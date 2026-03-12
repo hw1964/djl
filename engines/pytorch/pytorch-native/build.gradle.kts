@@ -490,6 +490,9 @@ tasks {
     register<Jar>("packageCustomAarch64Cuda") {
         val pytorchVersion = ptVersion
         val cudaFlavor = ptFlavor.ifBlank { "cu128" }
+        // Use -PdjlRuntimeVersion=X.Y.Z to match the DJL version in the consuming project.
+        // Defaults to 0.36.0 (latest Maven Central release) since this fork tracks 0.37.0-dev.
+        val djlVer = project.findProperty("djlRuntimeVersion") as String? ?: "0.36.0"
 
         archiveBaseName.set("pytorch-native-$cudaFlavor")
         archiveVersion.set(pytorchVersion)
@@ -507,6 +510,9 @@ tasks {
 
         from(jniLibPath) {
             include("libdjl_torch.so")
+            // Rename to match DJL version so findJniLibrary() resolves it automatically.
+            // DJL looks for {djlVersion}-libdjl_torch.so in the extracted cache dir.
+            rename("libdjl_torch.so", "$djlVer-libdjl_torch.so")
             into("native/lib")
         }
 
