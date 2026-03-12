@@ -20,7 +20,7 @@ with NVIDIA GPUs.
 | System | NVIDIA DGX Spark / GIGABYTE AI TOP Atom |
 | SoC | NVIDIA Grace Blackwell GB10 |
 | CPU | ARM Neoverse V2 (aarch64) |
-| GPU | NVIDIA Blackwell — compute capability 12.1 (sm_120) |
+| GPU | NVIDIA Blackwell — compute capability 12.1 (sm_121) |
 | OS | Ubuntu 24.04 LTS aarch64 |
 
 ## Prerequisites
@@ -69,7 +69,7 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 # Stage 1+2: Clone PyTorch, build libtorch from source, build JNI
 # This takes several hours on first run (compiles ~2485 CUDA objects)
-./gradlew clean compileJNI -Paarch64 -Pcuda=cu128
+./gradlew clean compileJNI -Paarch64 -Pcuda=cu128 --no-configuration-cache
 
 # Stage 3: Package into a JAR
 ./gradlew packageCustomAarch64Cuda -Pcuda=cu128 --no-configuration-cache
@@ -94,35 +94,56 @@ EOF
 
 ### What `build.sh` does for aarch64 + CUDA
 
-1. Clones PyTorch v2.7.1 from source with all submodules
-2. Applies patches if CUDA >= 13 (cuFFT enum removals, API signature changes)
-3. Configures with CMake + Ninja, targeting `sm_90` and `sm_120` (Blackwell)
-4. Compiles libtorch (~2485 objects, several hours)
-5. Installs to `libtorch/`
-6. Compiles the DJL JNI bridge (`libdjl_torch.so`) against the built libtorch
+1. Sets `CUDA_HOME=/usr/local/cuda-12.8` **first** (before any version detection)
+2. Clones PyTorch v2.7.1 from source with all submodules
+3. Applies **Patch A** (CUDA < 13): removes the extra `nullptr` arg from `cudaGraphNodeGetDependentNodes` in `cudnn_frontend_shim.h` — the bundled cudnn_frontend uses the 4-arg API but CUDA 12.8 declares the 3-arg version
+4. Applies **Patches B/C** (CUDA 13+ only): cuFFT enum removals
+5. Configures with CMake + Ninja, targeting `sm_90` and `sm_120+PTX` (Blackwell)
+6. Compiles libtorch (~2485 objects, several hours)
+7. Installs to `libtorch/`
+8. Compiles the DJL JNI bridge (`libdjl_torch.so`) against the built libtorch
+
+### Why `+PTX` in `TORCH_CUDA_ARCH_LIST`?
+
+The GB10 GPU is compute capability sm_121. Without `+PTX`, the JAR contains only sm_120
+SASS code. Inside the NGC Docker container this works (NGC provides a compat stack), but
+on bare metal `cuda-compat-12-8` ships no libraries. The `+PTX` flag embeds PTX intermediate
+code for sm_120, which the CUDA runtime JIT-compiles for sm_121 at first launch.
 
 ## Using the JAR
 
-### Maven dependency
+### Maven dependency (use a profile to avoid errors on non-aarch64 machines)
 
 ```xml
-<dependency>
-    <groupId>ai.djl.pytorch</groupId>
-    <artifactId>pytorch-native-cu128</artifactId>
-    <version>2.7.1</version>
-    <classifier>linux-aarch64</classifier>
-    <scope>runtime</scope>
-</dependency>
+<profiles>
+    <profile>
+        <id>aarch64-cuda</id>
+        <dependencies>
+            <dependency>
+                <groupId>ai.djl.pytorch</groupId>
+                <artifactId>pytorch-native-cu128</artifactId>
+                <version>2.7.1</version>
+                <classifier>linux-aarch64</classifier>
+                <scope>runtime</scope>
+            </dependency>
+        </dependencies>
+    </profile>
+</profiles>
 ```
+
+Activate only on the aarch64+CUDA machine: `mvn exec:java -Paarch64-cuda ...`
 
 ### Running
 
 ```bash
 rm -rf ~/.djl.ai/pytorch/
-mvn exec:java \
+mvn exec:java -Paarch64-cuda \
   -Dexec.mainClass="your.MainClass" \
   -Dai.djl.default_engine=PyTorch
 ```
+
+DJL auto-extracts all `.so` files from the JAR into `~/.djl.ai/pytorch/2.7.1-cu128-linux-aarch64/`
+including `0.36.0-libdjl_torch.so` (renamed at package time to match DJL 0.36.0 from Maven Central).
 
 ## Running tests
 
@@ -135,7 +156,7 @@ export PYTORCH_VERSION=2.7.1
 export PYTORCH_FLAVOR=cu128
 
 # Copy JNI lib to expected location
-DJL_VERSION=0.37.0
+DJL_VERSION=0.36.0
 mkdir -p engines/pytorch/pytorch-native/jnilib/${DJL_VERSION}/linux-aarch64/cu128
 cp engines/pytorch/pytorch-native/build/libdjl_torch.so \
    engines/pytorch/pytorch-native/jnilib/${DJL_VERSION}/linux-aarch64/cu128/
@@ -162,17 +183,23 @@ testLargeTensor  PASSED   (GPU - large tensor allocation on Blackwell)
 
 - **JAVA_HOME**: On Ubuntu 24.04 aarch64, the path is `/usr/lib/jvm/java-21-openjdk-arm64` (not `aarch64`)
 - **PT_VERSION flag**: Do not pass `-DPT_VERSION=V1_13_X` to cmake for PyTorch 2.7+. The `c10/util/variant.h` header was removed; `std::variant` is used instead.
-- **Gradle config cache**: Use `--no-configuration-cache` for the `packageCustomAarch64Cuda` task
+- **Gradle config cache**: Use `--no-configuration-cache` for **both** `compileJNI` and `packageCustomAarch64Cuda`. Without it, Gradle reuses cached config and skips `build.sh` entirely.
 - **CUDA 13.1**: PyTorch 2.7.1 does not support CUDA 13.x. Use 12.8.
-- **TORCH_CUDA_ARCH_LIST**: Must include `12.0` for Blackwell GB10 (compute capability 12.1). The build defaults to `"9.0;12.0"`.
+- **CUDA_HOME ordering**: `CUDA_HOME=/usr/local/cuda-12.8` must be set **before** `nvcc --version` is called for CUDA_MAJOR detection. The default `/usr/local/cuda` symlink points to CUDA 13 in the NGC container.
+- **cudnn_frontend nullptr patch**: The bundled cudnn_frontend uses a 4-arg `cudaGraphNodeGetDependentNodes`. CUDA 12.8 has the 3-arg version. Patch A removes the extra `nullptr` arg for CUDA < 13.
+- **cmake relative path**: If `CMAKE_PREFIX_PATH=../libtorch` fails to find `TorchConfig.cmake`, use the absolute path: `/build/djl/engines/pytorch/pytorch-native/libtorch`.
+- **Bare metal vs Docker**: The first build's JAR (without `+PTX`) only works inside the NGC Docker container. The current JAR (with `+PTX`) works on bare metal too.
 
 ## Build artifacts
 
-The built JAR (`pytorch-native-cu128-2.7.1-linux-aarch64.jar`, ~276MB) is available as a
-GitHub Release asset on this fork. It contains:
+The built JAR (`pytorch-native-cu128-2.7.1-linux-aarch64.jar`, ~488MB) is available as a
+GitHub Release asset on this fork at:
+`https://github.com/hw1964/djl/releases/tag/v2.7.1-aarch64-cu128`
+
+It contains:
 
 - `libc10.so`, `libc10_cuda.so` — PyTorch core libraries
 - `libtorch.so`, `libtorch_cpu.so`, `libtorch_cuda.so` — PyTorch runtime
 - `libcaffe2_nvrtc.so` — NVRTC integration
-- `libdjl_torch.so` — DJL JNI bridge
+- `0.36.0-libdjl_torch.so` — DJL JNI bridge (renamed to match DJL 0.36.0)
 - `pytorch.properties` — version/flavor metadata
