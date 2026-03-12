@@ -39,46 +39,50 @@ if [[ ! -d "libtorch" ]]; then
             git submodule sync
             git submodule update --init --recursive --jobs 8
 
-            # --- PATCHES (only for CUDA 13.x) ---
-            # PyTorch 2.7.1 + CUDA 12.8 is an officially supported combination
-            # and needs no patches. Patches 1-3 are only needed for CUDA 13.x
-            # where cuFFT enums were removed and cudaGraphNodeGetDependentNodes
-            # changed to a 4-arg signature.
+            # --- PATCHES ---
+            # The cudnn_frontend submodule bundled with PyTorch v2.7.1 uses the
+            # 4-arg cudaGraphNodeGetDependentNodes (with nullptr edge-data arg).
+            # CUDA 12.8 declares the 3-arg version — so we strip the nullptr for 12.8.
+            # CUDA 13.x removed cuFFT enums and also needs the 4-arg call (already present).
             CUDA_MAJOR=$("${CUDA_HOME:-/usr/local/cuda}"/bin/nvcc --version | grep -oP 'release \K[0-9]+')
-            if [[ "$CUDA_MAJOR" -ge 13 ]]; then
-                echo "=== Applying CUDA 13.x patches ==="
 
-                # PATCH 1: Add cufft.h include
-                sed -i '1i #include <cufft.h>' aten/src/ATen/native/cuda/CuFFTUtils.h
-
-                # PATCH 2: Remove cuFFT enums dropped in CUDA 13.x
-                sed -i '/case CUFFT_INCOMPLETE_PARAMETER_LIST:/,/return "CUFFT_INCOMPLETE_PARAMETER_LIST";/d' \
-                    aten/src/ATen/native/cuda/CuFFTUtils.h
-                sed -i '/case CUFFT_PARSE_ERROR:/,/return "CUFFT_PARSE_ERROR";/d' \
-                    aten/src/ATen/native/cuda/CuFFTUtils.h
-                sed -i '/case CUFFT_LICENSE_ERROR:/,/return "CUFFT_LICENSE_ERROR";/d' \
-                    aten/src/ATen/native/cuda/CuFFTUtils.h
-
-                # PATCH 3: Fix cudaGraphNodeGetDependentNodes 4-arg signature
+            # PATCH A: For CUDA < 13 — remove the extra nullptr arg so the call
+            # matches the 3-arg signature in cuda_runtime_api.h
+            if [[ "$CUDA_MAJOR" -lt 13 ]]; then
+                echo "=== CUDA $CUDA_MAJOR: removing nullptr from cudaGraphNodeGetDependentNodes ==="
                 python3 -c "
 import re, sys
 path = 'third_party/cudnn_frontend/include/cudnn_frontend_shim.h'
 with open(path, 'r') as f:
     content = f.read()
 patched = re.sub(
-    r'(cudaGraphNodeGetDependentNodes,\s*node,\s*pDependentNodes,)\s*(pNumDependentNodes\))',
-    r'\1 nullptr, \2',
+    r'(cudaGraphNodeGetDependentNodes,\s*node,\s*pDependentNodes,)\s*nullptr,\s*(pNumDependentNodes\))',
+    r'\1 \2',
     content
 )
 if patched == content:
-    print('⚠️  Patch 3 SKIPPED - pattern not found', file=sys.stderr)
+    print('⚠️  Patch A SKIPPED - nullptr not found (may already be 3-arg)', file=sys.stderr)
 else:
     with open(path, 'w') as f:
         f.write(patched)
-    print('✅ Patch 3 OK')
+    print('✅ Patch A OK: removed nullptr for CUDA 12.x 3-arg API')
 "
-            else
-                echo "=== CUDA $CUDA_MAJOR detected — no patches needed ==="
+            fi
+
+            # PATCHES B/C: For CUDA 13.x — remove dropped cuFFT enums
+            if [[ "$CUDA_MAJOR" -ge 13 ]]; then
+                echo "=== Applying CUDA 13.x patches ==="
+
+                # PATCH B: Add cufft.h include
+                sed -i '1i #include <cufft.h>' aten/src/ATen/native/cuda/CuFFTUtils.h
+
+                # PATCH C: Remove cuFFT enums dropped in CUDA 13.x
+                sed -i '/case CUFFT_INCOMPLETE_PARAMETER_LIST:/,/return "CUFFT_INCOMPLETE_PARAMETER_LIST";/d' \
+                    aten/src/ATen/native/cuda/CuFFTUtils.h
+                sed -i '/case CUFFT_PARSE_ERROR:/,/return "CUFFT_PARSE_ERROR";/d' \
+                    aten/src/ATen/native/cuda/CuFFTUtils.h
+                sed -i '/case CUFFT_LICENSE_ERROR:/,/return "CUFFT_LICENSE_ERROR";/d' \
+                    aten/src/ATen/native/cuda/CuFFTUtils.h
             fi
 
             # --- CUDA 12.8 toolkit ---
