@@ -11,6 +11,11 @@ endif()
 if(NOT BUILD_ANDROID)
     message("Building djl_torch with the host...")
     find_package(Torch REQUIRED)
+    
+    if(USE_CUDA)
+        cmake_policy(SET CMP0146 OLD)  # Suppresses the deprecation warning for FindCUDA
+        find_package(CUDA REQUIRED)
+    endif()
 
     set(JAVA_AWT_LIBRARY NotNeeded)
     set(JAVA_AWT_INCLUDE_PATH NotNeeded)
@@ -65,7 +70,9 @@ set_property(TARGET djl_torch PROPERTY CXX_STANDARD 17)
 # build host
 if(NOT BUILD_ANDROID)
     target_link_libraries(djl_torch "${TORCH_LIBRARIES}")
-    target_include_directories(djl_torch PUBLIC build/include ${JNI_INCLUDE_DIRS} ${UTILS_INCLUDE_DIR})
+    
+    target_include_directories(djl_torch PUBLIC build/include ${JNI_INCLUDE_DIRS} ${UTILS_INCLUDE_DIR} ${CUDA_INCLUDE_DIRS})
+
     # We have to kill the default rpath and use current dir
     set(CMAKE_SKIP_RPATH TRUE)
     if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")

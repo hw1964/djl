@@ -2,3 +2,5 @@ cmake-build-*/
 libtorch
 libtorch_android
 jnilib/
+pytorch/
+build_libtorch/

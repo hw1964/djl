@@ -483,6 +483,54 @@ tasks {
             delete(dir.parentFile / "pytorch-jni/jnilib")
         }
     }
+
+    // =============================================================
+    // NEW TASK: packageCustomAarch64Cuda (for DGX Spark / Blackwell)
+    // =============================================================
+    register<Jar>("packageCustomAarch64Cuda") {
+        val pytorchVersion = ptVersion
+        val cudaFlavor = ptFlavor.ifBlank { "cu128" }
+
+        archiveBaseName.set("pytorch-native-$cudaFlavor")
+        archiveVersion.set(pytorchVersion)
+        archiveClassifier.set("linux-aarch64")
+
+        val projectDir = layout.projectDirectory
+        val libtorchPath = projectDir.dir("libtorch/lib")
+        val jniLibPath = projectDir.dir("build")
+
+        from(libtorchPath) {
+            include("*.so")
+            include("*.so.*")
+            into("native/lib")
+        }
+
+        from(jniLibPath) {
+            include("libdjl_torch.so")
+            into("native/lib")
+        }
+
+        doFirst {
+            val propFile = buildDirectory / "pytorch.properties"
+            propFile.parentFile.mkdirs()
+            propFile.writeText("""
+                version=$pytorchVersion
+                flavor=$cudaFlavor
+                os=linux
+                arch=aarch64
+            """.trimIndent())
+        }  
+
+        from(buildDirectory / "pytorch.properties") {
+            into("native/lib")
+        }
+
+        manifest {
+            attributes("Implementation-Version" to pytorchVersion)
+        }
+
+        println("✅ Custom linux-aarch64 CUDA JAR ready for $cudaFlavor")
+    }
 }
 
 // Post-publish task to make deployment visible in Central Publisher Portal.
