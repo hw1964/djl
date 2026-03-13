@@ -14,7 +14,7 @@
 | System | NVIDIA DGX Spark / GIGABYTE AI TOP ATOM |
 | SoC | NVIDIA Grace Blackwell GB10 |
 | CPU | ARM Neoverse (aarch64 / arm64) |
-| GPU | Blackwell GB10 — CUDA compute capability 12.1 (sm_120) |
+| GPU | Blackwell GB10 — CUDA compute capability 12.1 (sm_121) |
 | OS | Ubuntu 24.04 LTS aarch64 |
 | NGC container CUDA | 13.1 (from NGC container, NOT used for build) |
 | Build CUDA | **12.8** (installed alongside 13.1, used for compilation) |
@@ -24,7 +24,8 @@
 | Python | 3.12 |
 | Build tool | Ninja (preferred over make for parallelism) |
 | CPU cores available | 20 (Grace CPU) |
-| DJL version | 0.37.0-SNAPSHOT |
+| DJL version (fork) | 0.37.0-SNAPSHOT |
+| DJL version (Maven Central / runtime) | **0.36.0** |
 | PyTorch version | 2.7.1 |
 | CUB version | 2.7.0 (bundled with CUDA 12.8) |
 
@@ -46,7 +47,7 @@ apt-get install -y --no-install-recommends cuda-toolkit-12-8
 
 CUDA 12.8 installs to `/usr/local/cuda-12.8/`. The build uses `CUDA_HOME=/usr/local/cuda-12.8`.
 
-**With CUDA 12.8, PyTorch 2.7.1 compiles without ANY patches** — no source modifications needed.
+**With CUDA 12.8, PyTorch 2.7.1 compiles with one patch** — the bundled `cudnn_frontend` submodule uses a 4-arg `cudaGraphNodeGetDependentNodes` call, but CUDA 12.8 declares the 3-arg version. Patch A removes the extra `nullptr` arg.
 
 ---
 
@@ -74,11 +75,35 @@ djl/                                         <- fork of https://github.com/hw196
 
 ## 4. Build Strategy
 
-1. **Clones PyTorch from source** (`github.com/pytorch/pytorch`) at v2.7.1
-2. **Compiles libtorch** using CMake + Ninja with CUDA 12.8 targeting `sm_90` and `sm_120+PTX` (Blackwell)
-3. **Compiles DJL JNI** (`libdjl_torch.so`) against the freshly built libtorch
-4. **Packages a custom JAR** (`pytorch-native-cu128-2.7.1-linux-aarch64.jar`) via Gradle
-5. **Installs to local Maven cache** for use in the Java project
+1. **Sets `CUDA_HOME=/usr/local/cuda-12.8`** before anything else (so `nvcc --version` returns 12, not 13)
+2. **Clones PyTorch from source** (`github.com/pytorch/pytorch`) at v2.7.1
+3. **Applies Patch A** (CUDA < 13): removes `nullptr` arg from `cudaGraphNodeGetDependentNodes` in `cudnn_frontend_shim.h`
+4. **Compiles libtorch** using CMake + Ninja with CUDA 12.8, `TORCH_CUDA_ARCH_LIST="9.0;12.0+PTX"` (Blackwell bare metal)
+5. **Compiles DJL JNI** (`libdjl_torch.so`) against the freshly built libtorch
+6. **Packages a custom JAR** (`pytorch-native-cu128-2.7.1-linux-aarch64.jar`, ~488MB) via Gradle — renames JNI lib to `0.36.0-libdjl_torch.so`
+7. **Installs to local Maven cache** for use in the Java project
+
+### Using the pre-built JAR (no compilation)
+
+The JAR is **not on Maven Central** — download from the GitHub Release and install manually:
+
+```bash
+wget https://github.com/hw1964/djl/releases/download/v2.7.1-aarch64-cu128/pytorch-native-cu128-2.7.1-linux-aarch64.jar
+DEST=~/.m2/repository/ai/djl/pytorch/pytorch-native-cu128/2.7.1
+mkdir -p "$DEST"
+cp pytorch-native-cu128-2.7.1-linux-aarch64.jar "$DEST/"
+cat > "$DEST/pytorch-native-cu128-2.7.1.pom" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>ai.djl.pytorch</groupId>
+  <artifactId>pytorch-native-cu128</artifactId>
+  <version>2.7.1</version>
+</project>
+EOF
+```
 
 ---
 
