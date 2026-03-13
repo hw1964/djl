@@ -159,17 +159,40 @@ EOF
 
 Activate only on the aarch64+CUDA machine: `mvn exec:java -Paarch64-cuda ...`
 
+### DJL JNI loading: seeding the cache
+
+DJL's `findJniLibrary()` runs **before** `findNativeLibrary()` — it looks for
+`0.36.0-libdjl_torch.so` in `~/.djl.ai/pytorch/2.7.1-cu128-linux-aarch64/` and if not
+found, tries to download from `publish.djl.ai` CDN (which doesn't have aarch64+cu128).
+The `ai.djl.pytorch.library_path` system property does NOT bypass this check.
+
+**Solution**: The `aarch64-cuda` Maven profile should include a `maven-antrun-plugin` step
+that copies `0.36.0-libdjl_torch.so` from the native JAR (via `maven-dependency-plugin`
+extraction) into the DJL cache directory before execution. DJL then finds the JNI lib in
+the cache and auto-extracts the remaining native libs from the classpath JAR.
+
+### Host CUDA 12.8 runtime dependencies
+
+The native libs were compiled against CUDA 12.8. On the host (which has CUDA 13.0 driver),
+you need the CUDA 12.8 runtime libraries registered via `ldconfig`:
+
+```bash
+# Install CUDA 12.8 runtime libs on host
+sudo apt-get install -y cuda-toolkit-12-8 libcusparselt0-cuda-12 libcudnn9-cuda-12 libopenblas0
+
+# Register lib paths
+echo "/usr/local/cuda-12.8/targets/sbsa-linux/lib" | sudo tee /etc/ld.so.conf.d/cuda-12.8.conf
+echo "/usr/lib/aarch64-linux-gnu/libcusparseLt/12" | sudo tee /etc/ld.so.conf.d/cusparselt-12.conf
+sudo ldconfig
+```
+
 ### Running
 
 ```bash
-rm -rf ~/.djl.ai/pytorch/
-mvn exec:java -Paarch64-cuda \
+mvn clean compile exec:java -Paarch64-cuda \
   -Dexec.mainClass="your.MainClass" \
   -Dai.djl.default_engine=PyTorch
 ```
-
-DJL auto-extracts all `.so` files from the JAR into `~/.djl.ai/pytorch/2.7.1-cu128-linux-aarch64/`
-including `0.36.0-libdjl_torch.so` (renamed at package time to match DJL 0.36.0 from Maven Central).
 
 ## Running tests
 
