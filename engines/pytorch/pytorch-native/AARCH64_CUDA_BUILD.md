@@ -110,7 +110,33 @@ SASS code. Inside the NGC Docker container this works (NGC provides a compat sta
 on bare metal `cuda-compat-12-8` ships no libraries. The `+PTX` flag embeds PTX intermediate
 code for sm_120, which the CUDA runtime JIT-compiles for sm_121 at first launch.
 
-## Using the JAR
+## Using the pre-built JAR (no compilation needed)
+
+The JAR is not on Maven Central — download it from the GitHub Release and install to
+your local Maven cache:
+
+```bash
+# Download
+wget https://github.com/hw1964/djl/releases/download/v2.7.1-aarch64-cu128/pytorch-native-cu128-2.7.1-linux-aarch64.jar
+
+# Install to local Maven cache
+DEST=~/.m2/repository/ai/djl/pytorch/pytorch-native-cu128/2.7.1
+mkdir -p "$DEST"
+cp pytorch-native-cu128-2.7.1-linux-aarch64.jar "$DEST/"
+
+# Create a minimal POM so Maven resolves the dependency
+cat > "$DEST/pytorch-native-cu128-2.7.1.pom" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>ai.djl.pytorch</groupId>
+  <artifactId>pytorch-native-cu128</artifactId>
+  <version>2.7.1</version>
+</project>
+EOF
+```
 
 ### Maven dependency (use a profile to avoid errors on non-aarch64 machines)
 
@@ -188,7 +214,8 @@ testLargeTensor  PASSED   (GPU - large tensor allocation on Blackwell)
 - **CUDA_HOME ordering**: `CUDA_HOME=/usr/local/cuda-12.8` must be set **before** `nvcc --version` is called for CUDA_MAJOR detection. The default `/usr/local/cuda` symlink points to CUDA 13 in the NGC container.
 - **cudnn_frontend nullptr patch**: The bundled cudnn_frontend uses a 4-arg `cudaGraphNodeGetDependentNodes`. CUDA 12.8 has the 3-arg version. Patch A removes the extra `nullptr` arg for CUDA < 13.
 - **cmake relative path**: If `CMAKE_PREFIX_PATH=../libtorch` fails to find `TorchConfig.cmake`, use the absolute path: `/build/djl/engines/pytorch/pytorch-native/libtorch`.
-- **Bare metal vs Docker**: The first build's JAR (without `+PTX`) only works inside the NGC Docker container. The current JAR (with `+PTX`) works on bare metal too.
+- **Bare metal vs Docker**: Without `+PTX`, sm_120 SASS only works inside the NGC Docker container (compat stack). With `+PTX` (current default), the JAR works on bare metal too via PTX JIT compilation.
+- **`TORCH_CUDA_ARCH_LIST`**: Defaults to `"9.0;12.0+PTX"`. The `+PTX` is required for bare-metal GB10 (sm_121). Without it, you get `no kernel image available` errors outside Docker.
 
 ## Build artifacts
 
